@@ -8,24 +8,18 @@ from astrbot.api.star import register, Star
 
 logger = logging.getLogger("astrbot")
 
-@register("weather_query", "Soulter", "多版本天气查询插件", "1.0.0")
-class WeatherQuery(Star):
+@register("maoyan_boxoffice", "Soulter", "猫眼实时票房插件", "1.0.0")
+class MaoyanBoxOffice(Star):
     def __init__(self, context: Context) -> None:
         super().__init__(context)
-        self.api_url = "https://xiaoapi.cn/API/zs_tq.php"
+        self.api_url = "https://api.pearktrue.cn/api/maoyan/"
         self.timeout = aiohttp.ClientTimeout(total=15)  # 15秒超时
 
-    async def fetch_weather(self, city: str, source: str = "baidu", num: Optional[str] = None, n: Optional[str] = None) -> Optional[dict]:
-        """获取天气数据（包含增强的错误处理）"""
+    async def fetch_data(self) -> Optional[dict]:
+        """获取票房数据（包含增强的错误处理）"""
         try:
-            params = {
-                "type": source,
-                "msg": city,
-                "num": num,
-                "n": n
-            }
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.get(self.api_url, params=params) as resp:
+                async with session.get(self.api_url) as resp:
                     # 记录原始响应文本
                     raw_text = await resp.text()
                     logger.debug(f"API原始响应: {raw_text[:200]}...")  # 截断前200字符
@@ -51,46 +45,87 @@ class WeatherQuery(Star):
             logger.error(f"未知异常: {str(e)}", exc_info=True)
             return None
 
-    @filter.command("天气查询")
-    async def query_weather(self, event: AstrMessageEvent):
-        '''获取指定城市的天气信息'''
+    def _format_boxoffice(self, amount: str) -> str:
+        """格式化票房数据（增强容错）"""
         try:
-            # 解析用户输入
-            args = event.get_args()
-            if not args:
-                yield CommandResult().message("🌍 请告诉我你想查询哪个城市的天气哦~ 例如：天气查询 北京")
-                return
+            if '万' in amount:
+                num = float(amount.replace('万', ''))
+                if num >= 10000:
+                    return f"{num/10000:.2f}亿"
+                return amount
+            if '亿' in amount:
+                return amount
+            return f"{amount}（未知格式）"
+        except:
+            logger.warning(f"异常票房格式: {amount}")
+            return amount
 
-            city = args[0]
-            source = args[1] if len(args) > 1 else "baidu"  # 默认使用百度天气
-
+    @filter.command("票房排行")
+    async def boxoffice_rank(self, event: AstrMessageEvent):
+        '''获取实时票房排行榜'''
+        try:
             # 发送等待提示
-            yield CommandResult().message(f"⏳ 正在从{source}获取{city}的天气数据，请稍等...")
+            yield CommandResult().message("🎬 正在抓取最新票房数据...")
 
             # 获取数据
-            data = await self.fetch_weather(city, source)
+            data = await self.fetch_data()
             if not data:
-                yield CommandResult().error("📡 连接天气数据中心失败，请稍后重试~")
+                yield CommandResult().error("📡 连接票房数据中心失败，请稍后重试~")
+                return
+
+            # 检查基础结构
+            if "code" not in data or "data" not in data:
+                logger.error(f"API响应结构异常: {data.keys()}")
+                yield CommandResult().error("🎥 数据格式异常，请联系管理员")
                 return
 
             # 检查状态码
-            if data.get("code") != 200:
+            if data["code"] != 200:
                 logger.error(f"API返回错误状态码: {data.get('msg')}")
-                yield CommandResult().error(f"📉 天气数据获取失败：{data.get('msg', '未知错误')}")
+                yield CommandResult().error(f"📉 数据获取失败：{data.get('msg', '未知错误')}")
+                return
+
+            # 检查data字段类型
+            if not isinstance(data["data"], list):
+                logger.error(f"data字段类型异常: {type(data['data'])}")
+                yield CommandResult().error("🎞️ 数据解析失败，请稍后再试")
+                return
+
+            # 获取前五部电影
+            movies = data["data"][:5]
+            if not movies:
+                yield CommandResult().message("🎥 今日影院静悄悄，暂无票房数据哦~")
                 return
 
             # 构建消息内容
-            msg = [
-                f"🌤️【{data.get('name', '未知地区')} 天气信息】🌤️\n",
-                data.get("data", "暂无详细天气数据"),
-                "\n\n💡 生活指数：" if "shzs" in data else "",
-                data.get("shzs", "暂无生活指数信息"),
-                f"\n\n🔗 数据来源：{source}天气"
-            ]
+            msg = ["🐱【猫眼实时票房TOP5】🐱\n"]
+            for movie in movies:
+                try:
+                    # 防御性字段检查
+                    required_fields = ['top', 'movieName', 'sumBoxDesc', 'boxRate', 'showCountRate', 'avgSeatView']
+                    if not all(field in movie for field in required_fields):
+                        logger.warning(f"电影数据字段缺失: {movie.keys()}")
+                        continue
+
+                    formatted_box = self._format_boxoffice(movie["sumBoxDesc"])
+                    msg.append(
+                        f"🏆 第{movie['top']}名：{movie['movieName']}\n"
+                        f"💰 累计票房：{formatted_box}（{movie['boxRate']}）\n"
+                        f"🎫 排片占比：{movie['showCountRate']}\n"
+                        f"👥 上座率：{movie['avgSeatView']}\n"
+                        "🍿" + "━"*20
+                    )
+                except Exception as e:
+                    logger.error(f"处理电影数据异常: {str(e)}", exc_info=True)
+                    continue
+
+            # 添加更新时间（防御性处理）
+            timestamp = data.get("time", "").split('.')[0] if "time" in data else "未知时间"
+            msg.append(f"\n⏰ 更新时间：{timestamp}")
 
             # 发送结果
-            yield CommandResult().message("".join(msg)).use_t2i(False)
+            yield CommandResult().message("\n".join(msg)).use_t2i(False)
 
         except Exception as e:
             logger.error(f"处理指令异常: {str(e)}", exc_info=True)
-            yield CommandResult().error("🌦️ 系统开小差了，请稍后再试~")
+            yield CommandResult().error("🎥 系统开小差了，请稍后再试~")
