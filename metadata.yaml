@@ -1,0 +1,6 @@
+name: astrbot_plugin_maoyan              # 插件唯一标识
+desc: 基于猫眼API的实时票房查询插件        # 简洁的功能描述
+help: 输入「票房排行」获取实时票房数据      # 用户帮助提示
+version: v1.0.0                         # 初始版本号
+author: Soulter                        # 开发者名称
+repo: https://github.com/N724/nbx.git  # 插件仓库地址
