@@ -92,7 +92,7 @@ class MaoyanBoxOffice(Star):
                 return
 
             # 获取前五部电影
-            movies = data["data"][:5]
+            movies = data["data"][:10]
             if not movies:
                 yield CommandResult().message("🎥 今日影院静悄悄，暂无票房数据哦~")
                 return
